@@ -4,3 +4,4 @@ __pycache__
 *.pytorch
 *.tex
 *.swp
+.idea
