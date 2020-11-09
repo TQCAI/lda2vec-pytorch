@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch
 from torch.autograd import Variable
@@ -8,12 +10,13 @@ from torch.utils.data.dataset import Dataset
 from torch.utils.data import DataLoader
 from .lda2vec_loss import loss, topic_embedding
 
-
 # negative sampling power
 BETA = 0.75
 
 # i add some noise to the gradient
 ETA = 0.4
+
+
 # i believe this helps optimization.
 # the idea is taken from here:
 # https://arxiv.org/abs/1511.06807
@@ -66,15 +69,16 @@ def train(data, unigram_distribution, word_vectors,
     doc_ids = data[:, 0]
     unique_docs, counts = np.unique(doc_ids, return_counts=True)
     weights = np.zeros((len(unique_docs),), 'float32')
-    for i, j in enumerate(unique_docs):
+    for i, unique_doc in enumerate(unique_docs):
         # longer a document -> lower the document weight when computing loss
-        weights[j] = 1.0/np.log(counts[i])
-    weights = torch.FloatTensor(weights).cuda()
+        weights[unique_doc] = 1.0 / np.log(counts[i])
+    device = os.environ["DEVICE"]
+    weights = torch.FloatTensor(weights).to(device)  # (n_documents, ) 每个文档字的个数
 
     # prepare word distribution
-    unigram_distribution = torch.FloatTensor(unigram_distribution**BETA)
+    unigram_distribution = torch.FloatTensor(unigram_distribution ** BETA)  # (vocab_size, ) BETA = 0.75 这个操作用于负采样
     unigram_distribution /= unigram_distribution.sum()
-    unigram_distribution = unigram_distribution.cuda()
+    unigram_distribution = unigram_distribution.to(device)
 
     # create a data feeder
     dataset = SimpleDataset(torch.LongTensor(data))
@@ -90,21 +94,24 @@ def train(data, unigram_distribution, word_vectors,
         topics, word_vectors, unigram_distribution,
         n_documents, weights, lambda_const, num_sampled
     )
-    model.cuda()
+    if device == "cpu":
+        model.cpu()
+    else:
+        model.cuda()
 
     if doc_weights_init is not None:
-        model.doc_weights.weight.data = torch.FloatTensor(doc_weights_init).cuda()
+        model.doc_weights.weight.data = torch.FloatTensor(doc_weights_init).to(device)  # 根据LDA的结果, 取对数, 除温度
 
     params = [
-        {'params': [model.topics.topic_vectors],
+        {'params': [model.topics.topic_vectors],  # [1, 25, 50]
          'lr': topics_lr, 'weight_decay': topics_weight_decay},
-        {'params': [model.doc_weights.weight],
+        {'params': [model.doc_weights.weight],  # [12829, 25]
          'lr': doc_weights_lr},
-        {'params': [model.neg.embedding.weight],
+        {'params': [model.neg.embedding.weight],  # [7460, 50]
          'lr': word_vecs_lr}
     ]
     optimizer = optim.Adam(params)
-    n_batches = math.ceil(n_windows/batch_size)
+    n_batches = math.ceil(n_windows / batch_size)
     print('number of batches:', n_batches, '\n')
     losses = []  # collect all losses here
     doc_weights_shape = model.doc_weights.weight.size()
@@ -119,7 +126,7 @@ def train(data, unigram_distribution, word_vectors,
 
             for batch in tqdm(iterator):
 
-                batch = Variable(batch.cuda())
+                batch = Variable(batch.to(device))
                 doc_indices = batch[:, 0]
                 pivot_words = batch[:, 1]
                 target_words = batch[:, 2:]
@@ -131,8 +138,8 @@ def train(data, unigram_distribution, word_vectors,
                 total_loss.backward()
 
                 # level of noise becomes lower as training goes on
-                sigma = ETA/epoch**0.55
-                noise = sigma*Variable(torch.randn(doc_weights_shape).cuda())
+                sigma = ETA / epoch ** 0.55
+                noise = sigma * Variable(torch.randn(doc_weights_shape).to(device))
                 model.doc_weights.weight.grad += noise
 
                 # gradient clipping
@@ -142,10 +149,10 @@ def train(data, unigram_distribution, word_vectors,
                 optimizer.step()
 
                 n_samples = batch.size(0)
-                running_neg_loss += neg_loss.data[0]*n_samples
-                running_dirichlet_loss += dirichlet_loss.data[0]*n_samples
+                running_neg_loss += float(neg_loss.data.to('cpu').numpy()) * n_samples
+                running_dirichlet_loss += float(dirichlet_loss.data.to('cpu').numpy()) * n_samples
 
-            losses += [(epoch, running_neg_loss/n_windows, running_dirichlet_loss/n_windows)]
+            losses += [(epoch, running_neg_loss / n_windows, running_dirichlet_loss / n_windows)]
             print('{0:.2f} {1:.2f}'.format(*losses[-1][1:]))
             if epoch % save_every == 0:
                 print('\nsaving!\n')

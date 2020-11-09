@@ -7,10 +7,10 @@ from utils import train
 
 def main():
 
-    data = np.load('data.npy')
-    unigram_distribution = np.load('unigram_distribution.npy')
-    word_vectors = np.load('word_vectors.npy')
-    doc_weights_init = np.load('doc_weights_init.npy')
+    data = np.load('data.npy')  #  (1023189, 12)
+    unigram_distribution = np.load('unigram_distribution.npy') # (7460, )
+    word_vectors = np.load('word_vectors.npy') #  (7460, 50)
+    doc_weights_init = np.load('doc_weights_init.npy') # (12829, 25)
 
     # transform to logits
     doc_weights_init = np.log(doc_weights_init + 1e-4)

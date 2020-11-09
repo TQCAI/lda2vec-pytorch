@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from scipy.stats import ortho_group
 from .alias_multinomial import AliasMultinomial
 
-
 # a small value
 EPSILON = 1e-9
 
@@ -36,10 +35,10 @@ class loss(nn.Module):
         """
         super(loss, self).__init__()
 
-        self.topics = topics
-        self.n_topics = topics.n_topics
-        self.alpha = 1.0/self.n_topics
-        self.lambda_const = lambda_const
+        self.topics = topics # utils.lda2vec_loss.topic_embedding
+        self.n_topics = topics.n_topics # 25
+        self.alpha = 1.0 / self.n_topics
+        self.lambda_const = lambda_const # 500
         self.weights = loss_doc_weights
 
         # document distributions (logits) over the topics
@@ -70,8 +69,9 @@ class loss(nn.Module):
         doc_vectors = self.topics(doc_weights)
 
         neg_loss = self.neg(pivot_words, target_words, doc_vectors, w)
-        dirichlet_loss = (w*F.log_softmax(doc_weights).sum(1)).mean()
-        dirichlet_loss *= self.lambda_const*(1.0 - self.alpha)
+        # w.mean() = 1
+        dirichlet_loss = (w * F.log_softmax(doc_weights).sum(1)).mean()
+        dirichlet_loss *= self.lambda_const * (1.0 - self.alpha)
 
         return neg_loss, dirichlet_loss
 
@@ -96,8 +96,8 @@ class negative_sampling_loss(nn.Module):
         # 'AliasMultinomial' is a lot faster than torch.multinomial
         self.multinomial = AliasMultinomial(word_distribution)
 
-        self.num_sampled = num_sampled
-        self.embedding_dim = embedding_dim
+        self.num_sampled = num_sampled # 15
+        self.embedding_dim = embedding_dim # 50
         self.dropout1 = nn.Dropout(PIVOTS_DROPOUT)
         self.dropout2 = nn.Dropout(DOC_VECS_DROPOUT)
 
@@ -134,13 +134,13 @@ class negative_sampling_loss(nn.Module):
         # compute dot product between a context vector
         # and each word vector in the window,
         # shape: [batch_size, window_size]
-        log_targets = (targets*unsqueezed_context).sum(2).sigmoid()\
+        log_targets = (targets * unsqueezed_context).sum(2).sigmoid() \
             .clamp(min=EPSILON).log()
 
         # sample negative words for each word in the window,
         # shape: [batch_size*window_size*num_sampled]
-        noise = self.multinomial.draw(batch_size*window_size*self.num_sampled)
-        noise = Variable(noise).view(batch_size, window_size*self.num_sampled)
+        noise = self.multinomial.draw(batch_size * window_size * self.num_sampled)
+        noise = Variable(noise).view(batch_size, window_size * self.num_sampled)
 
         # shape: [batch_size, window_size*num_sampled, embedding_dim]
         noise = self.embedding(noise)
@@ -153,14 +153,14 @@ class negative_sampling_loss(nn.Module):
         # and each negative word's vector for each word in the window,
         # then sum over negative words,
         # shape: [batch_size, window_size]
-        sum_log_sampled = (noise*unsqueezed_context).sum(3).neg().sigmoid()\
+        sum_log_sampled = (noise * unsqueezed_context).sum(3).neg().sigmoid() \
             .clamp(min=EPSILON).log().sum(2)
 
         neg_loss = log_targets + sum_log_sampled
 
         # sum over the window, then take mean over the batch
         # shape: []
-        return (loss_doc_weights*neg_loss.sum(1)).mean().neg()
+        return (loss_doc_weights * neg_loss.sum(1)).mean().neg()
 
 
 class topic_embedding(nn.Module):
@@ -175,9 +175,10 @@ class topic_embedding(nn.Module):
 
         # initialize topic vectors by a random orthogonal matrix
         assert n_topics < embedding_dim
-        topic_vectors = ortho_group.rvs(embedding_dim)
-        topic_vectors = topic_vectors[0:n_topics]
-        topic_vectors = torch.FloatTensor(topic_vectors)
+        topic_vectors = ortho_group.rvs(embedding_dim)  # (50, 50)
+        topic_vectors = topic_vectors[0:n_topics]  # (25, 50)
+        # shape: [1, n_topics, embedding_dim]
+        topic_vectors = torch.FloatTensor(topic_vectors).unsqueeze(0)  # (1, 25, 50)
 
         self.topic_vectors = nn.Parameter(topic_vectors)
         self.n_topics = n_topics
@@ -198,11 +199,8 @@ class topic_embedding(nn.Module):
         # shape: [batch_size, n_topics, 1]
         unsqueezed_doc_probs = doc_probs.unsqueeze(2)
 
-        # shape: [1, n_topics, embedding_dim]
-        unsqueezed_topic_vectors = self.topic_vectors.unsqueeze(0)
-
         # linear combination of topic vectors weighted by probabilities,
         # shape: [batch_size, embedding_dim]
-        doc_vectors = (unsqueezed_doc_probs*unsqueezed_topic_vectors).sum(1)
+        doc_vectors = (unsqueezed_doc_probs * self.topic_vectors).sum(1)
 
         return doc_vectors
